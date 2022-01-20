@@ -13,8 +13,10 @@ import ida_name
 import idaapi
 import idc
 
+DEFAULT_LOG_LEVEL = logging.INFO
+
 log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
+log.setLevel(DEFAULT_LOG_LEVEL)
 log_handler = logging.StreamHandler()
 log_formatter = logging.Formatter(
     '[%(levelname)s] - %(module)s.%(funcName)s - %(message)s')
@@ -1163,48 +1165,53 @@ class VxHunterPlugin(idaapi.plugin_t):
     @staticmethod
     def fix_vxworks_idb(load_address, vx_version, symbol_table_start,
                         symbol_table_end):
-        current_image_base = idaapi.get_imagebase()
-        symbol_interval = 16
-        if vx_version == 6:
-            symbol_interval = 20
-        symbol_table_start += load_address
-        symbol_table_end += load_address
-        ea = symbol_table_start
-        shift_address = load_address - current_image_base
-        while shift_address >= 0x70000000:
-            idaapi.rebase_program(0x70000000, 0x0008)
-            shift_address -= 0x70000000
-        idaapi.rebase_program(shift_address, 0x0008)
-        while ea < symbol_table_end:
-            # for VxWorks 6 unknown symbol format
-            if idc.get_wide_byte(ea + symbol_table_end - 2) == 3:
-                ea += symbol_interval
-                continue
-            offset = 4
-            idc.create_strlit(idc.get_wide_dword(ea + offset), idc.BADADDR)
-            sym_name = idc.get_strlit_contents(
-                idc.get_wide_dword(ea + offset), -1,
-                ida_nalt.STRTYPE_C
-            )
-            if sym_name:
-                syn_name_dst = idc.get_wide_dword(ea + offset + 4)
-                if vx_version == 6:
-                    sym_name_type = idc.get_wide_byte(ea + 0x12)
-                else:
-                    sym_name_type = idc.get_wide_byte(ea + 0x0e)
+        idaapi.show_wait_box("Auto fixing VxWorks idb ...")
+        try:
+            current_image_base = idaapi.get_imagebase()
+            symbol_interval = 16
+            if vx_version == 6:
+                symbol_interval = 20
+            symbol_table_start += load_address
+            symbol_table_end += load_address
+            ea = symbol_table_start
+            shift_address = load_address - current_image_base
+            while shift_address >= 0x70000000:
+                idaapi.rebase_program(0x70000000, 0x0008)
+                shift_address -= 0x70000000
+            idaapi.rebase_program(shift_address, 0x0008)
+            while ea < symbol_table_end:
+                # for VxWorks 6 unknown symbol format
+                if idc.get_wide_byte(ea + symbol_table_end - 2) == 3:
+                    ea += symbol_interval
+                    continue
+                offset = 4
+                idc.create_strlit(idc.get_wide_dword(ea + offset), idc.BADADDR)
+                sym_name = idc.get_strlit_contents(
+                    idc.get_wide_dword(ea + offset), -1,
+                    ida_nalt.STRTYPE_C
+                )
+                if sym_name:
+                    syn_name_dst = idc.get_wide_dword(ea + offset + 4)
+                    if vx_version == 6:
+                        sym_name_type = idc.get_wide_byte(ea + 0x12)
+                    else:
+                        sym_name_type = idc.get_wide_byte(ea + 0x0e)
 
-                ida_name.set_name(syn_name_dst, sym_name.decode('latin-1'),
-                                  ida_name.SN_FORCE | ida_name.SN_NOWARN)
-                if sym_name_type in need_create_function:
-                    log.debug("Start fix Function {} at {}".format(
-                        sym_name, hex(syn_name_dst)))
-                    idc.create_insn(syn_name_dst)  # might not need
-                    ida_funcs.add_func(syn_name_dst, idc.BADADDR)
-            ea += symbol_interval
-        log.info("Fix function by symbol table finish.")
-        log.info("Start IDA auto analysis, depending on the size of the "
-                 "firmware this might take a few minutes.")
-        idaapi.auto_wait()
+                    ida_name.set_name(syn_name_dst, sym_name.decode('latin-1'),
+                                      ida_name.SN_FORCE | ida_name.SN_NOWARN)
+                    if sym_name_type in need_create_function:
+                        log.debug("Start fix Function {} at {}".format(
+                            sym_name, hex(syn_name_dst)))
+                        idc.create_insn(syn_name_dst)  # might not need
+                        ida_funcs.add_func(syn_name_dst, idc.BADADDR)
+                ea += symbol_interval
+            log.info("Fix function by symbol table finish.")
+            log.info("Start IDA auto analysis, depending on the size of the "
+                     "firmware this might take a few minutes.")
+            idaapi.auto_wait()
+        finally:
+            idaapi.hide_wait_box()
+
 
     @staticmethod
     def fix_code(start_address, end_address):
@@ -1342,8 +1349,11 @@ class VxHunterPlugin(idaapi.plugin_t):
     def load_symbol_file(self):
         symbol_file_path = ida_kernwin.ask_file(
             0, "*", "Please chose the VxWorks symbol file")
+        if not symbol_file_path:
+            return
         log.info("symbol_file_path: {}".format(symbol_file_path))
-        symbol_file_data = open(symbol_file_path, 'rb').read()
+        with open(symbol_file_path, 'rb') as fp:
+            symbol_file_data = fp.read()
         if is_vx_symbol_file(symbol_file_data):
             try:
                 idaapi.show_wait_box('Loading VxWorks symbol file ...')
