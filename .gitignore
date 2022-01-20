@@ -5,6 +5,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# idapython directory
+idapython/
+
+# idea
+.idea/
+
 # C extensions
 *.so
 
