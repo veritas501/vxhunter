@@ -13,6 +13,15 @@ import ida_name
 import idaapi
 import idc
 
+log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
+log_handler = logging.StreamHandler()
+log_formatter = logging.Formatter(
+    '[%(levelname)s] - %(module)s.%(funcName)s - %(message)s')
+log_handler.setFormatter(log_formatter)
+if not log.hasHandlers():
+    log.addHandler(log_handler)
+
 default_check_count = 100
 
 known_address = [0x80002000, 0x10000, 0x1000, 0xf2003fe4, 0x100000, 0x107fe0]
@@ -85,18 +94,8 @@ class VxTarget(object):
             self._symbol_interval = 20
         self.start_time = None
         self._performance_status = []
+        self.logger = log if logger is None else logger
 
-        if logger is None:
-            self.logger = logging.getLogger(__name__)
-            self.logger.setLevel(logging.INFO)
-            console_handler = logging.StreamHandler()
-            console_format = logging.Formatter(
-                '[%(levelname)] - [%(module)s.%(funcName)s] -  %(message)s')
-            console_handler.setFormatter(console_format)
-            if not self.logger.hasHandlers():
-                self.logger.addHandler(console_handler)
-        else:
-            self.logger = logger
         self._firmware_info = {
             "load_address": -1,
             "has_symbol": False,
@@ -946,7 +945,7 @@ def is_vx_symbol_file(file_data: bytes, is_big_endian=True):
     for key_function in function_name_key_words:
         key_function = key_function.encode('latin-1')
         if key_function not in file_data:
-            print("key function not found")
+            log.error("key function not found")
             return False
 
     if is_big_endian:
@@ -1079,7 +1078,7 @@ class VxHunterPlugin(idaapi.plugin_t):
             VxHunterMCLoadSymbolFile.register(self, "Load VxWorks symbol file")
 
         except Exception as ex:
-            print("Got Error!!!: {}".format(ex))
+            log.error("Got Error!!!: {}".format(ex))
 
         # setup popup menu
         if idaapi.IDA_SDK_VERSION >= 700:
@@ -1104,7 +1103,6 @@ class VxHunterPlugin(idaapi.plugin_t):
             if menu is not None:
                 pass
 
-        print("=" * 80)
         return idaapi.PLUGIN_KEEP
 
     def term(self):
@@ -1119,7 +1117,7 @@ class VxHunterPlugin(idaapi.plugin_t):
         ok = form.Execute()
         if ok == 1:
             vx_version = int(form.vx_version)
-            print("vx_version:%s" % vx_version)
+            log.info("vx_version: {}".format(vx_version))
             firmware_path = idaapi.get_input_file_path()
             firmware = open(firmware_path, 'rb').read()
             target = VxTarget(firmware=firmware, vx_version=vx_version)
@@ -1127,11 +1125,11 @@ class VxHunterPlugin(idaapi.plugin_t):
             target.quick_test()
 
             if target.load_address:
-                print("Load Address is:%s" % target.load_address)
+                log.info("Load Address is: {}".format(target.load_address))
             else:
                 target.find_loading_address()
                 if target.load_address:
-                    print("Load Address is:%s" % target.load_address)
+                    log.info("Load Address is: {}".format(target.load_address))
             if not target.load_address:
                 return
             symbol_table_start = target.symbol_table_start
@@ -1189,7 +1187,6 @@ class VxHunterPlugin(idaapi.plugin_t):
                 ida_nalt.STRTYPE_C
             )
             if sym_name:
-                print("Found {} in symbol table".format(sym_name))
                 syn_name_dst = idc.get_wide_dword(ea + offset + 4)
                 if vx_version == 6:
                     sym_name_type = idc.get_wide_byte(ea + 0x12)
@@ -1199,14 +1196,14 @@ class VxHunterPlugin(idaapi.plugin_t):
                 ida_name.set_name(syn_name_dst, sym_name.decode('latin-1'),
                                   ida_name.SN_FORCE | ida_name.SN_NOWARN)
                 if sym_name_type in need_create_function:
-                    print("Start fix Function {} at {}".format(
+                    log.debug("Start fix Function {} at {}".format(
                         sym_name, hex(syn_name_dst)))
                     idc.create_insn(syn_name_dst)  # might not need
                     ida_funcs.add_func(syn_name_dst, idc.BADADDR)
             ea += symbol_interval
-        print("Fix function by symbol table finish.")
-        print("Start IDA auto analysis, depending on the size of the firmware "
-              "this might take a few minutes.")
+        log.info("Fix function by symbol table finish.")
+        log.info("Start IDA auto analysis, depending on the size of the "
+                 "firmware this might take a few minutes.")
         idaapi.auto_wait()
 
     @staticmethod
@@ -1279,7 +1276,8 @@ class VxHunterPlugin(idaapi.plugin_t):
         string_address = string_table_start_address
         while True:
             if string_address:
-                print("Start Make string at address: %s" % hex(string_address))
+                log.debug("Start making string @ {}".format(
+                    hex(string_address)))
                 idc.create_strlit(string_address, idc.BADADDR)
                 string_address = self.get_next_ascii_string_address(
                     string_address)
@@ -1294,10 +1292,10 @@ class VxHunterPlugin(idaapi.plugin_t):
             unpack_format = '<I'
 
         symbol_count = struct.unpack(unpack_format, file_data[4:8])[0]
-        print("symbol_count: {}".format(symbol_count))
+        log.info("symbol_count: {}".format(symbol_count))
         symbol_offset = 8
         string_table_offset = 8 + 8 * symbol_count
-        print("string_table_offset: {}".format(string_table_offset))
+        log.info("string_table_offset: {}".format(hex(string_table_offset)))
         # get symbols
         for i in range(symbol_count):
             offset = i * 8
@@ -1307,7 +1305,6 @@ class VxHunterPlugin(idaapi.plugin_t):
             string_offset = \
                 struct.unpack(unpack_format, b'\x00' + symbol_data[1:4])[0]
             string_offset += string_table_offset
-            print("string_offset: {}".format(string_offset))
             symbol_name = bytearray()
             while True:
                 if file_data[string_offset] != 0:
@@ -1316,7 +1313,8 @@ class VxHunterPlugin(idaapi.plugin_t):
                 else:
                     break
             symbol_name = symbol_name.decode('latin-1')
-            print("symbol_name: {}".format(symbol_name))
+            log.debug("Find symbol: {}, offset: {}".format(symbol_name,
+                                                           string_offset))
             symbol_address = struct.unpack(unpack_format, symbol_data[-4:])[0]
             symbol_list.append([flag, symbol_name, symbol_address])
             # Find TP-Link device loading address with symbols
@@ -1336,7 +1334,7 @@ class VxHunterPlugin(idaapi.plugin_t):
                               ida_name.SN_FORCE | ida_name.SN_NOWARN)
             if flag == 0x54:
                 if symbol_name:
-                    print("Start fix Function {} at {}".format(
+                    log.debug("Start fix Function {} @ {}".format(
                         symbol_name, hex(symbol_address)))
                     idc.create_insn(symbol_address)  # might not need
                     ida_funcs.add_func(symbol_address, idc.BADADDR)
@@ -1344,15 +1342,15 @@ class VxHunterPlugin(idaapi.plugin_t):
     def load_symbol_file(self):
         symbol_file_path = ida_kernwin.ask_file(
             0, "*", "Please chose the VxWorks symbol file")
-        print("symbol_file_path: {}".format(symbol_file_path))
+        log.info("symbol_file_path: {}".format(symbol_file_path))
         symbol_file_data = open(symbol_file_path, 'rb').read()
         if is_vx_symbol_file(symbol_file_data):
             try:
                 idaapi.show_wait_box('Loading VxWorks symbol file ...')
                 self.load_symbols(symbol_file_data)
+                idaapi.auto_wait()
             finally:
                 idaapi.hide_wait_box()
-            idaapi.auto_wait()
         else:
             return
 
@@ -1433,7 +1431,7 @@ try:
 
 except Exception as err:
     # TODO: Add some handle later.
-    print("err: {}".format(err))
+    log.error("err: {}".format(err))
 
 
 # register IDA plugin
