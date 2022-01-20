@@ -87,9 +87,10 @@ class VxTarget(object):
             self.logger.setLevel(logging.INFO)
             console_handler = logging.StreamHandler()
             console_format = logging.Formatter(
-                '[%(levelname)-8s][%(module)s.%(funcName)s] %(message)s')
+                '[%(levelname)] - [%(module)s.%(funcName)s] -  %(message)s')
             console_handler.setFormatter(console_format)
-            self.logger.addHandler(console_handler)
+            if not self.logger.hasHandlers():
+                self.logger.addHandler(console_handler)
         else:
             self.logger = logger
         self._firmware_info = {
